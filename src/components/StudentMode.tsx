@@ -8,12 +8,27 @@ interface StudentModeProps {
 }
 
 export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
+  // Unique Student Session ID to prevent collisions across multiple student tabs/devices
+  const [studentSessionId] = useState<string>(() => {
+    if (currentUser?.id) return currentUser.id;
+    const saved = sessionStorage.getItem('studyflow_student_session_id');
+    if (saved) return saved;
+    const newId = `std-sess-${Math.floor(100000 + Math.random() * 900000)}`;
+    sessionStorage.setItem('studyflow_student_session_id', newId);
+    return newId;
+  });
+
   // Joined Room State
-  const [joinedRoom, setJoinedRoom] = useState<string>(currentUser?.roomCode || 'ROOM-3A1');
+  const [joinedRoom, setJoinedRoom] = useState<string>(
+    (currentUser?.roomCode || 'ROOM-3A1').toUpperCase().trim()
+  );
   const [studentName, setStudentName] = useState<string>(currentUser?.name || '김민수 (학생)');
   const [seatNo, setSeatNo] = useState<number>(currentUser?.seatNo || 7);
   const [showQrModal, setShowQrModal] = useState<boolean>(false);
-  const [roomCodeInput, setRoomCodeInput] = useState<string>('');
+  const [roomCodeInput, setRoomCodeInput] = useState<string>(joinedRoom);
+  const [nameInput, setNameInput] = useState<string>(studentName);
+  const [seatInput, setSeatInput] = useState<number>(seatNo);
+  const [teacherConnectedMessage, setTeacherConnectedMessage] = useState<string | null>(null);
 
   // AI Vision Metrics State
   const [status, setStatus] = useState<FocusStatus>('focus');
@@ -50,13 +65,14 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
   useEffect(() => {
     const syncToTeacher = async () => {
       try {
-        await fetch(`/api/rooms/${joinedRoom}/student-sync`, {
+        const cleanRoom = joinedRoom.toUpperCase().trim().replace(/\s+/g, '');
+        const res = await fetch(`/api/rooms/${cleanRoom}/student-sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             className: '3학년 1반 자율학습',
             student: {
-              id: currentUser?.id || `std-${seatNo}`,
+              id: studentSessionId,
               seatNo,
               name: studentName,
               status,
@@ -73,15 +89,22 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
             },
           }),
         });
+
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData.directMessage) {
+            setTeacherConnectedMessage(`🚨 [교사 경고 알림]: "${resData.directMessage}"`);
+          }
+        }
       } catch (e) {
         console.warn('Sync error:', e);
       }
     };
 
     syncToTeacher();
-    const interval = setInterval(syncToTeacher, 2000); // Sync every 2 seconds
+    const interval = setInterval(syncToTeacher, 1500); // Sync every 1.5s
     return () => clearInterval(interval);
-  }, [joinedRoom, studentName, seatNo, status, metrics, focusSeconds, totalSeconds, drowsyAlertCount, distractionCount, currentUser]);
+  }, [joinedRoom, studentSessionId, studentName, seatNo, status, metrics, focusSeconds, totalSeconds, drowsyAlertCount, distractionCount]);
 
   // 1-second interval timer
   useEffect(() => {
@@ -276,27 +299,101 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
         </div>
       </div>
 
-      {/* Code Change Modal */}
+      {/* Teacher Warning Toast Popup */}
+      {teacherConnectedMessage && (
+        <div className="p-4 rounded-2xl bg-rose-950 border-2 border-rose-500 text-rose-100 flex items-center justify-between shadow-2xl animate-bounce">
+          <div className="flex items-center space-x-3">
+            <Bell className="w-6 h-6 text-rose-400 shrink-0" />
+            <span className="text-sm font-bold">{teacherConnectedMessage}</span>
+          </div>
+          <button
+            onClick={() => setTeacherConnectedMessage(null)}
+            className="px-3 py-1 rounded-lg bg-rose-800 hover:bg-rose-700 text-xs font-bold"
+          >
+            확인 및 닫기
+          </button>
+        </div>
+      )}
+
+      {/* Code & Student Info Change Modal */}
       {showQrModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
-            <h3 className="text-lg font-bold text-white">클래스 코드 변경</h3>
-            <input
-              type="text"
-              value={roomCodeInput}
-              onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
-              placeholder="예: ROOM-3A1"
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white"
-            />
-            <div className="flex space-x-2">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-lg font-bold text-white flex items-center space-x-2">
+                <QrCode className="w-5 h-5 text-indigo-400" />
+                <span>클래스 방 코드 및 학생 정보</span>
+              </h3>
+              <button
+                onClick={() => setShowQrModal(false)}
+                className="text-slate-400 hover:text-white text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-300 block mb-1">
+                  클래스 초대 방 코드
+                </label>
+                <input
+                  type="text"
+                  value={roomCodeInput}
+                  onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
+                  placeholder="예: ROOM-3A1"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono font-bold text-indigo-300 focus:outline-none focus:border-indigo-500"
+                />
+                <div className="flex items-center space-x-1 mt-2">
+                  <span className="text-[11px] text-slate-400">빠른 코드 선택:</span>
+                  {['ROOM-3A1', 'CLASS-1', 'STUDY-777', 'TEST-101'].map((code) => (
+                    <button
+                      key={code}
+                      onClick={() => setRoomCodeInput(code)}
+                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-indigo-300 border border-slate-700"
+                    >
+                      {code}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">학생 이름</label>
+                  <input
+                    type="text"
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">좌석 번호</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={seatInput}
+                    onChange={(e) => setSeatInput(parseInt(e.target.value, 10) || 1)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-bold text-center"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex space-x-2 pt-2">
               <button
                 onClick={() => {
-                  if (roomCodeInput.trim()) setJoinedRoom(roomCodeInput.trim());
+                  const cleanedCode = roomCodeInput.trim().toUpperCase() || 'ROOM-3A1';
+                  setJoinedRoom(cleanedCode);
+                  if (nameInput.trim()) setStudentName(nameInput.trim());
+                  setSeatNo(seatInput);
                   setShowQrModal(false);
                 }}
-                className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl"
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-colors shadow-lg shadow-indigo-600/30"
               >
-                변경 적용
+                교사 대시보드 연결 적용
               </button>
             </div>
           </div>

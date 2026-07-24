@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { StudentData, ClassroomStats, AlertNotification, ClassSessionConfig } from '../types';
+import { StudentData, ClassroomStats, AlertNotification, ClassSessionConfig, UserProfile } from '../types';
 import { CameraVisionCanvas } from './CameraVisionCanvas';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Users, Shield, Bell, Filter, CheckCircle, AlertTriangle, Smartphone, UserX, Send, Video, Volume2, VolumeX, Clock, Play, Pause, RotateCcw, Copy, ExternalLink, RefreshCw, BarChart2, ShieldCheck, ChevronRight, Camera, Target } from 'lucide-react';
+import { Users, Shield, Bell, Filter, CheckCircle, AlertTriangle, Smartphone, UserX, Send, Video, Volume2, VolumeX, Clock, Play, Pause, RotateCcw, Copy, ExternalLink, RefreshCw, BarChart2, ShieldCheck, ChevronRight, Camera, Target, QrCode, Edit3 } from 'lucide-react';
 
-export const TeacherMode: React.FC = () => {
+interface TeacherModeProps {
+  currentUser?: UserProfile | null;
+}
+
+export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
   // Class Room Code & Connected Real Students State
-  const [roomCode, setRoomCode] = useState<string>('ROOM-3A1');
+  const [roomCode, setRoomCode] = useState<string>(
+    (currentUser?.roomCode || 'ROOM-3A1').toUpperCase().trim().replace(/\s+/g, '')
+  );
+  const [showRoomCodeModal, setShowRoomCodeModal] = useState<boolean>(false);
+  const [roomCodeInput, setRoomCodeInput] = useState<string>(roomCode);
   const [className, setClassName] = useState<string>('3학년 1반 자율학습실');
   const [googleMeetUrl, setGoogleMeetUrl] = useState<string>('https://meet.google.com/studyflow-3a-2026');
   
@@ -54,7 +62,8 @@ export const TeacherMode: React.FC = () => {
   // Poll Real Connected Students from Backend API
   const fetchRoomData = async () => {
     try {
-      const res = await fetch(`/api/rooms/${roomCode}`);
+      const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
+      const res = await fetch(`/api/rooms/${cleanRoom}`);
       if (res.ok) {
         const data = await res.json();
         let apiStudents: StudentData[] = data.students || [];
@@ -112,7 +121,7 @@ export const TeacherMode: React.FC = () => {
 
   useEffect(() => {
     fetchRoomData();
-    const interval = setInterval(fetchRoomData, 2000); // Sync every 2 seconds
+    const interval = setInterval(fetchRoomData, 1500); // Sync every 1.5s
     return () => clearInterval(interval);
   }, [roomCode, showSampleStudents]);
 
@@ -134,7 +143,8 @@ export const TeacherMode: React.FC = () => {
     setCustomMinutesInput(mins.toString());
 
     // Sync timer to backend
-    fetch(`/api/rooms/${roomCode}/timer`, {
+    const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
+    fetch(`/api/rooms/${cleanRoom}/timer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetStudyMinutes: mins, timerRunning: true }),
@@ -163,10 +173,22 @@ export const TeacherMode: React.FC = () => {
 
   const urgentAlertStudents = students.filter((s) => s.status === 'drowsy' || s.status === 'talking');
 
-  const handleSendDirectWarning = (student: StudentData, customMsg?: string) => {
+  const handleSendDirectWarning = async (student: StudentData, customMsg?: string) => {
     const msg = customMsg || directMessageText.trim() || '지속적인 수면/소란이 감지되었습니다. 바른 자세로 집중해 주세요.';
     playAlarmSound();
-    setMessageSentToast(`🔔 [${student.name} 학생] 기기로 경고 전달: "${msg}"`);
+
+    try {
+      const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
+      await fetch(`/api/rooms/${cleanRoom}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: student.id, message: msg }),
+      });
+    } catch (e) {
+      console.warn('Error sending direct warning message:', e);
+    }
+
+    setMessageSentToast(`🔔 [${student.name} 학생] 기기로 경고 메시지가 전달되었습니다: "${msg}"`);
     setDirectMessageText('');
     setTimeout(() => setMessageSentToast(null), 4000);
   };
@@ -203,11 +225,22 @@ export const TeacherMode: React.FC = () => {
 
           <div className="flex flex-wrap items-center gap-2">
             <button
+              onClick={() => {
+                setRoomCodeInput(roomCode);
+                setShowRoomCodeModal(true);
+              }}
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-indigo-600/30"
+            >
+              <QrCode className="w-4 h-4" />
+              <span>클래스 코드 변경/입력 ({roomCode})</span>
+            </button>
+
+            <button
               onClick={copyRoomCode}
               className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 text-xs font-bold hover:bg-indigo-600/30 transition-all"
             >
               <Copy className="w-3.5 h-3.5" />
-              <span>방코드 복사 ({roomCode})</span>
+              <span>복사</span>
             </button>
 
             <button
@@ -478,6 +511,67 @@ export const TeacherMode: React.FC = () => {
               >
                 <Send className="w-3.5 h-3.5 inline mr-1" />
                 <span>전송</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Room Code Change Modal for Teacher */}
+      {showRoomCodeModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-lg font-bold text-white flex items-center space-x-2">
+                <QrCode className="w-5 h-5 text-indigo-400" />
+                <span>교사 대시보드 클래스 방 코드 변경/입력</span>
+              </h3>
+              <button onClick={() => setShowRoomCodeModal(false)} className="text-slate-400 hover:text-white text-sm">
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              학생들이 사용하는 동일한 초대 방 코드를 입력하면 해당 학급의 모든 학생 실시간 카메라 AI 연동 화면이 교사 대시보드에 표시됩니다.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-300 block mb-1">
+                  클래스 방 코드
+                </label>
+                <input
+                  type="text"
+                  value={roomCodeInput}
+                  onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
+                  placeholder="예: ROOM-3A1"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono font-bold text-indigo-300 focus:outline-none focus:border-indigo-500"
+                />
+                <div className="flex items-center space-x-1 mt-2">
+                  <span className="text-[11px] text-slate-400">빠른 선택:</span>
+                  {['ROOM-3A1', 'CLASS-1', 'STUDY-777', 'TEST-101'].map((code) => (
+                    <button
+                      key={code}
+                      onClick={() => setRoomCodeInput(code)}
+                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-indigo-300 border border-slate-700"
+                    >
+                      {code}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex space-x-2 pt-2">
+              <button
+                onClick={() => {
+                  const cleanedCode = roomCodeInput.trim().toUpperCase() || 'ROOM-3A1';
+                  setRoomCode(cleanedCode);
+                  setShowRoomCodeModal(false);
+                }}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-colors shadow-lg shadow-indigo-600/30"
+              >
+                교사 대시보드 코드 변경 적용
               </button>
             </div>
           </div>

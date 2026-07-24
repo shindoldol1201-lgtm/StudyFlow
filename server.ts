@@ -32,6 +32,7 @@ interface RoomState {
   timerRunning: boolean;
   students: Record<string, any>;
   alerts: any[];
+  directMessages: Record<string, string>;
   lastUpdated: number;
 }
 
@@ -39,7 +40,7 @@ const roomsStore: Record<string, RoomState> = {};
 
 // Helper to get or create room
 function getOrCreateRoom(roomCode: string, className?: string): RoomState {
-  const code = (roomCode || "ROOM-3A1").toUpperCase().trim();
+  const code = (roomCode || "ROOM-3A1").toUpperCase().trim().replace(/\s+/g, "");
   if (!roomsStore[code]) {
     roomsStore[code] = {
       roomCode: code,
@@ -50,6 +51,7 @@ function getOrCreateRoom(roomCode: string, className?: string): RoomState {
       timerRunning: true,
       students: {},
       alerts: [],
+      directMessages: {},
       lastUpdated: Date.now(),
     };
   }
@@ -99,6 +101,13 @@ app.post("/api/rooms/:roomCode/student-sync", (req, res) => {
     lastUpdated: "방금 전",
   };
 
+  // Check for pending direct message from teacher to this student
+  let directMessage: string | null = null;
+  if (room.directMessages && room.directMessages[student.id]) {
+    directMessage = room.directMessages[student.id];
+    delete room.directMessages[student.id];
+  }
+
   // Add alert if student status is drowsy or talking
   if (student.status === "drowsy" || student.status === "talking") {
     const alertId = `alt-${student.id}-${Date.now()}`;
@@ -125,7 +134,27 @@ app.post("/api/rooms/:roomCode/student-sync", (req, res) => {
   }
 
   room.lastUpdated = Date.now();
-  return res.json({ success: true, activeCount: Object.keys(room.students).length, targetStudyMinutes: room.targetStudyMinutes });
+  return res.json({
+    success: true,
+    roomCode: room.roomCode,
+    activeCount: Object.keys(room.students).length,
+    targetStudyMinutes: room.targetStudyMinutes,
+    directMessage,
+  });
+});
+
+// API Endpoint: Teacher sends warning/direct message to student
+app.post("/api/rooms/:roomCode/message", (req, res) => {
+  const { studentId, message } = req.body;
+  if (!studentId || !message) {
+    return res.status(400).json({ error: "studentId and message are required" });
+  }
+
+  const room = getOrCreateRoom(req.params.roomCode);
+  if (!room.directMessages) room.directMessages = {};
+  room.directMessages[studentId] = message;
+
+  res.json({ success: true, studentId, message });
 });
 
 // API Endpoint: Teacher Updates Session Target Time / Room Settings
