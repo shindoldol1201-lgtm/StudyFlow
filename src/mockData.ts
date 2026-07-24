@@ -55,6 +55,7 @@ export const INITIAL_STUDENTS: StudentData[] = Array.from({ length: 28 }).map((_
       phoneObjectDetected: status === 'distracted',
       skeletonVisible: status !== 'absent' && cameraConnected,
       fps: 9.8,
+      faceDetected: status !== 'absent' && cameraConnected,
     },
     lastUpdated: cameraConnected ? '방금 전' : '12분 전',
     privacyAvatar: {

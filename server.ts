@@ -22,6 +22,133 @@ const getAiClient = () => {
   });
 };
 
+// In-memory Room State Store for real multi-user/multi-device connection
+interface RoomState {
+  roomCode: string;
+  className: string;
+  googleMeetUrl: string;
+  targetStudyMinutes: number;
+  breakMinutes: number;
+  timerRunning: boolean;
+  students: Record<string, any>;
+  alerts: any[];
+  lastUpdated: number;
+}
+
+const roomsStore: Record<string, RoomState> = {};
+
+// Helper to get or create room
+function getOrCreateRoom(roomCode: string, className?: string): RoomState {
+  const code = (roomCode || "ROOM-3A1").toUpperCase().trim();
+  if (!roomsStore[code]) {
+    roomsStore[code] = {
+      roomCode: code,
+      className: className || "3학년 1반 자율학습실",
+      googleMeetUrl: "https://meet.google.com/studyflow-3a-2026",
+      targetStudyMinutes: 50,
+      breakMinutes: 10,
+      timerRunning: true,
+      students: {},
+      alerts: [],
+      lastUpdated: Date.now(),
+    };
+  }
+  return roomsStore[code];
+}
+
+// API Endpoint: Get Room State (For Teacher and Students)
+app.get("/api/rooms/:roomCode", (req, res) => {
+  const room = getOrCreateRoom(req.params.roomCode);
+  
+  // Filter out students inactive for over 30 seconds
+  const now = Date.now();
+  const activeStudents = Object.values(room.students).map((s: any) => {
+    const isOnline = now - (s.lastHeartbeat || 0) < 30000;
+    return {
+      ...s,
+      cameraConnected: isOnline,
+      status: isOnline ? s.status : "absent",
+    };
+  });
+
+  res.json({
+    roomCode: room.roomCode,
+    className: room.className,
+    googleMeetUrl: room.googleMeetUrl,
+    targetStudyMinutes: room.targetStudyMinutes,
+    breakMinutes: room.breakMinutes,
+    timerRunning: room.timerRunning,
+    students: activeStudents,
+    alerts: room.alerts,
+  });
+});
+
+// API Endpoint: Student Heartbeat / Real-time Camera AI Vision Sync
+app.post("/api/rooms/:roomCode/student-sync", (req, res) => {
+  const { student } = req.body;
+  if (!student || !student.id) {
+    return res.status(400).json({ error: "학생 데이터가 올바르지 않습니다." });
+  }
+
+  const room = getOrCreateRoom(req.params.roomCode, req.body.className);
+  
+  room.students[student.id] = {
+    ...student,
+    lastHeartbeat: Date.now(),
+    cameraConnected: true,
+    lastUpdated: "방금 전",
+  };
+
+  // Add alert if student status is drowsy or talking
+  if (student.status === "drowsy" || student.status === "talking") {
+    const alertId = `alt-${student.id}-${Date.now()}`;
+    const exists = room.alerts.some(
+      (a) => a.studentId === student.id && a.type === student.status && !a.resolved
+    );
+    if (!exists) {
+      room.alerts.unshift({
+        id: alertId,
+        studentId: student.id,
+        studentName: student.name,
+        seatNo: student.seatNo || 1,
+        type: student.status,
+        durationSeconds: 10,
+        timestamp: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }),
+        resolved: false,
+        message: student.status === "drowsy"
+          ? `🚨 ${student.name} 학생 실시간 수면/깊은 졸음 감지됨 (EAR ${student.metrics?.ear?.toFixed(2) || "0.12"})`
+          : `🗣️ ${student.name} 학생 실시간 소란/떠듦 감지됨 (MAR ${student.metrics?.mar?.toFixed(2) || "0.65"})`,
+      });
+      // Keep max 20 alerts
+      room.alerts = room.alerts.slice(0, 20);
+    }
+  }
+
+  room.lastUpdated = Date.now();
+  return res.json({ success: true, activeCount: Object.keys(room.students).length, targetStudyMinutes: room.targetStudyMinutes });
+});
+
+// API Endpoint: Teacher Updates Session Target Time / Room Settings
+app.post("/api/rooms/:roomCode/timer", (req, res) => {
+  const { targetStudyMinutes, breakMinutes, timerRunning } = req.body;
+  const room = getOrCreateRoom(req.params.roomCode);
+
+  if (targetStudyMinutes !== undefined) room.targetStudyMinutes = Number(targetStudyMinutes);
+  if (breakMinutes !== undefined) room.breakMinutes = Number(breakMinutes);
+  if (timerRunning !== undefined) room.timerRunning = Boolean(timerRunning);
+
+  room.lastUpdated = Date.now();
+  res.json({ success: true, roomCode: room.roomCode, targetStudyMinutes: room.targetStudyMinutes });
+});
+
+// API Endpoint: Teacher Clears / Resolves Alert
+app.post("/api/rooms/:roomCode/resolve-alert", (req, res) => {
+  const { alertId } = req.body;
+  const room = getOrCreateRoom(req.params.roomCode);
+  room.alerts = room.alerts.map((a) => (a.id === alertId ? { ...a, resolved: true } : a));
+  res.json({ success: true });
+});
+
 // API Endpoint: Health check
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", service: "StudyFlow AI Vision Engine API" });

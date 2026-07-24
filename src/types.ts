@@ -1,5 +1,19 @@
 export type AppMode = 'student' | 'teacher' | 'personal';
 
+export type UserRole = 'student' | 'teacher' | 'personal';
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  schoolName?: string;
+  className?: string; // e.g. "3학년 1반"
+  seatNo?: number;
+  roomCode?: string; // Connected class room code e.g. "ROOM-3A1"
+  createdAt: string;
+}
+
 export type FocusStatus = 'focus' | 'drowsy' | 'talking' | 'distracted' | 'absent';
 
 export interface VisionMetrics {
@@ -15,6 +29,15 @@ export interface VisionMetrics {
   phoneObjectDetected: boolean; // Object detection phone bounding box present
   skeletonVisible: boolean; // Upper body landmarks detected
   fps: number; // Vision stream processing FPS (e.g. 8~10 FPS)
+  faceDetected: boolean;
+}
+
+export interface ClassSessionConfig {
+  targetStudyMinutes: number; // Target focus duration in minutes (e.g. 50 mins)
+  breakMinutes: number; // Break duration in minutes (e.g. 10 mins)
+  isRunning: boolean;
+  startTime: number | null; // Timestamp
+  remainingSeconds: number;
 }
 
 export interface StudentData {
@@ -38,6 +61,7 @@ export interface StudentData {
     joints: { x: number; y: number }[];
     gazeVector: { x: number; y: number };
   };
+  videoSnapshot?: string; // Optional base64 snapshot for teacher live inspection
 }
 
 export interface ClassroomStats {
@@ -67,3 +91,4 @@ export interface AlertNotification {
   resolved: boolean;
   message: string;
 }
+
