@@ -33,6 +33,7 @@ interface RoomState {
   students: Record<string, any>;
   alerts: any[];
   directMessages: Record<string, string>;
+  kickedStudents?: Record<string, boolean>;
   lastUpdated: number;
 }
 
@@ -52,6 +53,7 @@ function getOrCreateRoom(roomCode: string, className?: string): RoomState {
       students: {},
       alerts: [],
       directMessages: {},
+      kickedStudents: {},
       lastUpdated: Date.now(),
     };
   }
@@ -62,16 +64,18 @@ function getOrCreateRoom(roomCode: string, className?: string): RoomState {
 app.get("/api/rooms/:roomCode", (req, res) => {
   const room = getOrCreateRoom(req.params.roomCode);
   
-  // Filter out students inactive for over 30 seconds
+  // Filter out students inactive for over 30 seconds or explicitly kicked
   const now = Date.now();
-  const activeStudents = Object.values(room.students).map((s: any) => {
-    const isOnline = now - (s.lastHeartbeat || 0) < 30000;
-    return {
-      ...s,
-      cameraConnected: isOnline,
-      status: isOnline ? s.status : "absent",
-    };
-  });
+  const activeStudents = Object.values(room.students)
+    .filter((s: any) => !room.kickedStudents || !room.kickedStudents[s.id])
+    .map((s: any) => {
+      const isOnline = now - (s.lastHeartbeat || 0) < 30000;
+      return {
+        ...s,
+        cameraConnected: isOnline,
+        status: isOnline ? s.status : "absent",
+      };
+    });
 
   res.json({
     roomCode: room.roomCode,
@@ -94,6 +98,16 @@ app.post("/api/rooms/:roomCode/student-sync", (req, res) => {
 
   const room = getOrCreateRoom(req.params.roomCode, req.body.className);
   
+  // Check if student was kicked by teacher
+  if (room.kickedStudents && room.kickedStudents[student.id]) {
+    delete room.students[student.id];
+    return res.json({
+      success: false,
+      kicked: true,
+      message: "교사에 의해 클래스에서 내보내기(퇴장)되었습니다.",
+    });
+  }
+
   room.students[student.id] = {
     ...student,
     lastHeartbeat: Date.now(),
@@ -141,6 +155,36 @@ app.post("/api/rooms/:roomCode/student-sync", (req, res) => {
     targetStudyMinutes: room.targetStudyMinutes,
     directMessage,
   });
+});
+
+// API Endpoint: Teacher Kicks / Expels a student from the room
+app.delete("/api/rooms/:roomCode/students/:studentId", (req, res) => {
+  const { roomCode, studentId } = req.params;
+  const room = getOrCreateRoom(roomCode);
+
+  if (room.students && room.students[studentId]) {
+    delete room.students[studentId];
+  }
+  if (!room.kickedStudents) room.kickedStudents = {};
+  room.kickedStudents[studentId] = true;
+
+  res.json({
+    success: true,
+    studentId,
+    message: "학생이 클래스에서 퇴장(내보내기) 되었습니다.",
+  });
+});
+
+// API Endpoint: Allow student to unkick / rejoin
+app.post("/api/rooms/:roomCode/unkick", (req, res) => {
+  const { studentId } = req.body;
+  const room = getOrCreateRoom(req.params.roomCode);
+
+  if (room.kickedStudents && studentId) {
+    delete room.kickedStudents[studentId];
+  }
+
+  res.json({ success: true });
 });
 
 // API Endpoint: Teacher sends warning/direct message to student

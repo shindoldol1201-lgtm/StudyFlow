@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { StudentData, ClassroomStats, AlertNotification, ClassSessionConfig, UserProfile } from '../types';
+import { StudentData, ClassroomStats, AlertNotification, ClassSessionConfig, UserProfile, FocusStatus } from '../types';
 import { CameraVisionCanvas } from './CameraVisionCanvas';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Users, Shield, Bell, Filter, CheckCircle, AlertTriangle, Smartphone, UserX, Send, Video, Volume2, VolumeX, Clock, Play, Pause, RotateCcw, Copy, ExternalLink, RefreshCw, BarChart2, ShieldCheck, ChevronRight, Camera, Target, QrCode, Edit3 } from 'lucide-react';
+import { Users, Shield, Bell, Filter, CheckCircle, AlertTriangle, Smartphone, UserX, Send, Video, Volume2, VolumeX, Clock, Play, Pause, RotateCcw, Copy, ExternalLink, RefreshCw, BarChart2, ShieldCheck, ChevronRight, Camera, Target, QrCode, Edit3, X } from 'lucide-react';
 
 interface TeacherModeProps {
   currentUser?: UserProfile | null;
@@ -59,6 +59,9 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
     }
   };
 
+  // Kicked student IDs ref to guarantee instantaneous removal
+  const kickedIdsRef = React.useRef<Set<string>>(new Set());
+
   // Poll Real Connected Students from Backend API
   const fetchRoomData = async () => {
     try {
@@ -66,7 +69,9 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
       const res = await fetch(`/api/rooms/${cleanRoom}`);
       if (res.ok) {
         const data = await res.json();
-        let apiStudents: StudentData[] = data.students || [];
+        let apiStudents: StudentData[] = (data.students || []).filter(
+          (s: StudentData) => !kickedIdsRef.current.has(s.id)
+        );
 
         // If sample toggle is active and no real students yet, add sample devices
         if (showSampleStudents && apiStudents.length === 0) {
@@ -75,7 +80,7 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
               id: 'sample-1',
               seatNo: 1,
               name: '김샘플 (테스트 기기 1)',
-              status: 'focus',
+              status: 'focus' as FocusStatus,
               cameraInstalled: true,
               cameraConnected: true,
               googleMeetConnected: true,
@@ -93,7 +98,7 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
               id: 'sample-2',
               seatNo: 2,
               name: '박테스트 (테스트 기기 2)',
-              status: 'drowsy',
+              status: 'drowsy' as FocusStatus,
               cameraInstalled: true,
               cameraConnected: true,
               googleMeetConnected: true,
@@ -107,7 +112,7 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
               lastUpdated: '방금 전',
               privacyAvatar: { joints: [], gazeVector: { x: 0, y: 0 } },
             },
-          ];
+          ].filter((s) => !kickedIdsRef.current.has(s.id));
         }
 
         setStudents(apiStudents);
@@ -191,6 +196,27 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
     setMessageSentToast(`🔔 [${student.name} 학생] 기기로 경고 메시지가 전달되었습니다: "${msg}"`);
     setDirectMessageText('');
     setTimeout(() => setMessageSentToast(null), 4000);
+  };
+
+  const handleKickStudent = async (studentId: string, studentName: string) => {
+    if (!confirm(`${studentName} 학생을 클래스에서 내보내시겠습니까?`)) return;
+
+    kickedIdsRef.current.add(studentId);
+    setStudents((prev) => prev.filter((s) => s.id !== studentId));
+    if (selectedStudent?.id === studentId) {
+      setSelectedStudent(null);
+    }
+
+    try {
+      const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
+      await fetch(`/api/rooms/${cleanRoom}/students/${studentId}`, {
+        method: 'DELETE',
+      });
+      setMessageSentToast(`🚨 [${studentName}] 학생을 클래스에서 내보냈습니다.`);
+      setTimeout(() => setMessageSentToast(null), 4000);
+    } catch (e) {
+      console.error('Failed to kick student:', e);
+    }
   };
 
   const copyRoomCode = () => {
@@ -416,13 +442,25 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
                   className="bg-slate-900 border border-slate-800 hover:border-indigo-500 rounded-xl p-2.5 space-y-2 cursor-pointer transition-all hover:scale-[1.03] shadow-md group relative"
                 >
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-200">#{std.seatNo} {std.name}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                      std.status === 'focus' ? 'bg-emerald-500/20 text-emerald-300' :
-                      std.status === 'drowsy' ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
-                    }`}>
-                      {std.status.toUpperCase()}
-                    </span>
+                    <span className="font-bold text-slate-200 truncate max-w-[85px]">#{std.seatNo} {std.name}</span>
+                    <div className="flex items-center space-x-1">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        std.status === 'focus' ? 'bg-emerald-500/20 text-emerald-300' :
+                        std.status === 'drowsy' ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
+                      }`}>
+                        {std.status.toUpperCase()}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleKickStudent(std.id, std.name);
+                        }}
+                        className="p-1 rounded bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white transition-colors border border-rose-500/30"
+                        title="학생 클래스에서 내보내기 (X)"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="h-28 rounded-lg overflow-hidden border border-slate-800 relative">
@@ -511,6 +549,17 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
               >
                 <Send className="w-3.5 h-3.5 inline mr-1" />
                 <span>전송</span>
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              <span className="text-xs text-slate-400">클래스 학생 관리:</span>
+              <button
+                onClick={() => handleKickStudent(selectedStudent.id, selectedStudent.name)}
+                className="px-3.5 py-2 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/50 text-rose-200 hover:text-white font-bold text-xs rounded-xl transition-all flex items-center space-x-1.5"
+              >
+                <UserX className="w-4 h-4" />
+                <span>{selectedStudent.name} 학생 클래스에서 내보내기 (퇴장)</span>
               </button>
             </div>
           </div>

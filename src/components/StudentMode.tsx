@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { FocusStatus, VisionMetrics, UserProfile } from '../types';
 import { CameraVisionCanvas } from './CameraVisionCanvas';
-import { Play, Pause, RotateCcw, QrCode, Bell, ShieldAlert, CheckCircle2, Flame, Smartphone, AlertCircle, Copy, ExternalLink, Video } from 'lucide-react';
+import { Play, Pause, RotateCcw, QrCode, Bell, ShieldAlert, CheckCircle2, Flame, Smartphone, AlertCircle, Copy, ExternalLink, Video, UserX, LogOut } from 'lucide-react';
 
 interface StudentModeProps {
   currentUser?: UserProfile | null;
+  onLogout?: () => void;
 }
 
-export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
+export const StudentMode: React.FC<StudentModeProps> = ({ currentUser, onLogout }) => {
   // Unique Student Session ID to prevent collisions across multiple student tabs/devices
   const [studentSessionId] = useState<string>(() => {
     if (currentUser?.id) return currentUser.id;
@@ -29,6 +30,7 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
   const [nameInput, setNameInput] = useState<string>(studentName);
   const [seatInput, setSeatInput] = useState<number>(seatNo);
   const [teacherConnectedMessage, setTeacherConnectedMessage] = useState<string | null>(null);
+  const [isKickedOut, setIsKickedOut] = useState<boolean>(false);
 
   // AI Vision Metrics State
   const [status, setStatus] = useState<FocusStatus>('focus');
@@ -92,6 +94,11 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
 
         if (res.ok) {
           const resData = await res.json();
+          if (resData.kicked) {
+            setIsKickedOut(true);
+          } else {
+            setIsKickedOut(false);
+          }
           if (resData.directMessage) {
             setTeacherConnectedMessage(`🚨 [교사 경고 알림]: "${resData.directMessage}"`);
           }
@@ -142,6 +149,28 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
     }
   };
 
+  const handleLeaveClass = async () => {
+    if (!confirm('현재 클래스에서 나가시겠습니까? 교사 대시보드 연결이 끊어지고 초기 화면으로 이동합니다.')) return;
+
+    try {
+      const cleanRoom = joinedRoom.toUpperCase().trim().replace(/\s+/g, '');
+      await fetch(`/api/rooms/${cleanRoom}/students/${studentSessionId}`, {
+        method: 'DELETE',
+      });
+    } catch (e) {
+      console.warn('Error sending leave class signal:', e);
+    }
+
+    sessionStorage.removeItem('studyflow_student_session_id');
+    localStorage.removeItem('studyflow_user');
+
+    if (onLogout) {
+      onLogout();
+    } else {
+      window.location.reload();
+    }
+  };
+
   const formatTime = (sec: number) => {
     const hours = Math.floor(sec / 3600);
     const minutes = Math.floor((sec % 3600) / 60);
@@ -178,6 +207,14 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
           >
             <QrCode className="w-4 h-4 text-indigo-400" />
             <span>클래스 코드 변경</span>
+          </button>
+
+          <button
+            onClick={handleLeaveClass}
+            className="flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-rose-200 text-xs sm:text-sm font-bold transition-all shadow-md"
+          >
+            <LogOut className="w-4 h-4 text-rose-400" />
+            <span>클래스 나가기</span>
           </button>
         </div>
       </div>
@@ -384,16 +421,71 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser }) => {
 
             <div className="flex space-x-2 pt-2">
               <button
-                onClick={() => {
+                onClick={async () => {
                   const cleanedCode = roomCodeInput.trim().toUpperCase() || 'ROOM-3A1';
                   setJoinedRoom(cleanedCode);
                   if (nameInput.trim()) setStudentName(nameInput.trim());
                   setSeatNo(seatInput);
                   setShowQrModal(false);
+                  try {
+                    await fetch(`/api/rooms/${cleanedCode}/unkick`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ studentId: studentSessionId }),
+                    });
+                    setIsKickedOut(false);
+                  } catch (e) {
+                    console.warn(e);
+                  }
                 }}
                 className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-colors shadow-lg shadow-indigo-600/30"
               >
                 교사 대시보드 연결 적용
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Kicked Out Modal Overlay */}
+      {isKickedOut && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border-2 border-rose-500 rounded-2xl p-6 max-w-md w-full text-center space-y-4 shadow-2xl">
+            <div className="w-16 h-16 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center mx-auto">
+              <UserX className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold text-rose-300">클래스에서 퇴장 처리됨</h3>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              담당 교사에 의해 현재 클래스(<strong className="text-indigo-300 font-bold">{joinedRoom}</strong>)에서 내보내기(퇴장)되었습니다.
+              <br />
+              다시 참여를 원하시면 담당 선생님께 문의하시거나 아래 버튼을 누르세요.
+            </p>
+            <div className="pt-2 flex flex-col gap-2">
+              <button
+                onClick={async () => {
+                  try {
+                    const cleanRoom = joinedRoom.toUpperCase().trim().replace(/\s+/g, '');
+                    await fetch(`/api/rooms/${cleanRoom}/unkick`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ studentId: studentSessionId }),
+                    });
+                    setIsKickedOut(false);
+                  } catch (e) {
+                    console.warn(e);
+                  }
+                }}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30"
+              >
+                다시 재입장 신청 / 참여하기
+              </button>
+              <button
+                onClick={() => {
+                  setShowQrModal(true);
+                }}
+                className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700"
+              >
+                클래스 방 코드 변경하기
               </button>
             </div>
           </div>
