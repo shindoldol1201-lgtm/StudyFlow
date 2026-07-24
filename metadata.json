@@ -1,0 +1,6 @@
+{
+  "name": "StudyFlow",
+  "description": "Google Meet Integrated Real-time AI Vision Classroom Monitoring System with Student Camera Verification, Sleep & Talking Detection, and Teacher Alert Dashboard",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
