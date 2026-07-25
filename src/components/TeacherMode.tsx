@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { StudentData, ClassroomStats, AlertNotification, ClassSessionConfig, UserProfile, FocusStatus } from '../types';
 import { CameraVisionCanvas } from './CameraVisionCanvas';
+import { roomChannel } from '../lib/roomChannel';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { Users, Shield, Bell, Filter, CheckCircle, AlertTriangle, Smartphone, UserX, Send, Video, Volume2, VolumeX, Clock, Play, Pause, RotateCcw, Copy, ExternalLink, RefreshCw, BarChart2, ShieldCheck, ChevronRight, Camera, Target, QrCode, Edit3, X } from 'lucide-react';
 
@@ -62,65 +63,117 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
   // Kicked student IDs ref to guarantee instantaneous removal
   const kickedIdsRef = React.useRef<Set<string>>(new Set());
 
+  // Subscribe to roomChannel for instant real-time student updates and leave events
+  useEffect(() => {
+    const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
+    const unsubscribe = roomChannel.subscribe(cleanRoom, (msg) => {
+      if (msg.type === 'STUDENT_SYNC' && msg.student) {
+        if (kickedIdsRef.current.has(msg.studentId!)) return;
+
+        setStudents((prev) => {
+          const existingIdx = prev.findIndex((s) => s.id === msg.studentId);
+          const updatedStd: StudentData = {
+            id: msg.studentId!,
+            seatNo: msg.student.seatNo || 1,
+            name: msg.student.name || '학생',
+            status: msg.student.status || 'focus',
+            cameraInstalled: true,
+            cameraConnected: true,
+            googleMeetConnected: true,
+            focusSeconds: msg.student.focusSeconds || 0,
+            totalSeconds: msg.student.totalSeconds || 0,
+            drowsyCount: msg.student.drowsyCount || 0,
+            talkingCount: msg.student.talkingCount || 0,
+            distractedCount: msg.student.distractedCount || 0,
+            absentSeconds: msg.student.absentSeconds || 0,
+            metrics: msg.student.metrics || {},
+            lastUpdated: '방금 전',
+            privacyAvatar: { joints: [], gazeVector: { x: 0, y: 0 } },
+          };
+
+          if (existingIdx >= 0) {
+            const list = [...prev];
+            list[existingIdx] = updatedStd;
+            return list;
+          } else {
+            return [...prev, updatedStd];
+          }
+        });
+      } else if (msg.type === 'STUDENT_LEAVE' && msg.studentId) {
+        setStudents((prev) => prev.filter((s) => s.id !== msg.studentId));
+      } else if (msg.type === 'TEACHER_KICK' && msg.studentId) {
+        kickedIdsRef.current.add(msg.studentId);
+        setStudents((prev) => prev.filter((s) => s.id !== msg.studentId));
+      }
+    });
+
+    return () => unsubscribe();
+  }, [roomCode]);
+
   // Poll Real Connected Students from Backend API
   const fetchRoomData = async () => {
     try {
       const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
       const res = await fetch(`/api/rooms/${cleanRoom}`);
       if (res.ok) {
-        const data = await res.json();
-        let apiStudents: StudentData[] = (data.students || []).filter(
-          (s: StudentData) => !kickedIdsRef.current.has(s.id)
-        );
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const data = await res.json();
+          let apiStudents: StudentData[] = (data.students || []).filter(
+            (s: StudentData) => !kickedIdsRef.current.has(s.id)
+          );
 
-        // If sample toggle is active and no real students yet, add sample devices
-        if (showSampleStudents && apiStudents.length === 0) {
-          apiStudents = [
-            {
-              id: 'sample-1',
-              seatNo: 1,
-              name: '김샘플 (테스트 기기 1)',
-              status: 'focus' as FocusStatus,
-              cameraInstalled: true,
-              cameraConnected: true,
-              googleMeetConnected: true,
-              focusSeconds: 2400,
-              totalSeconds: 2700,
-              drowsyCount: 0,
-              talkingCount: 0,
-              distractedCount: 0,
-              absentSeconds: 0,
-              metrics: { ear: 0.28, mar: 0.08, gazeX: 0, gazeY: 0, headPitch: 2, headYaw: 0, headRoll: 0, upperBodyJitter: 0.5, handNearFace: false, phoneObjectDetected: false, skeletonVisible: true, fps: 12, faceDetected: true },
-              lastUpdated: '방금 전',
-              privacyAvatar: { joints: [], gazeVector: { x: 0, y: 0 } },
-            },
-            {
-              id: 'sample-2',
-              seatNo: 2,
-              name: '박테스트 (테스트 기기 2)',
-              status: 'drowsy' as FocusStatus,
-              cameraInstalled: true,
-              cameraConnected: true,
-              googleMeetConnected: true,
-              focusSeconds: 1800,
-              totalSeconds: 2700,
-              drowsyCount: 3,
-              talkingCount: 0,
-              distractedCount: 0,
-              absentSeconds: 0,
-              metrics: { ear: 0.12, mar: 0.06, gazeX: 0, gazeY: 0.5, headPitch: 30, headYaw: 0, headRoll: 0, upperBodyJitter: 0.2, handNearFace: false, phoneObjectDetected: false, skeletonVisible: true, fps: 12, faceDetected: true },
-              lastUpdated: '방금 전',
-              privacyAvatar: { joints: [], gazeVector: { x: 0, y: 0 } },
-            },
-          ].filter((s) => !kickedIdsRef.current.has(s.id));
+          // If sample toggle is active and no real students yet, add sample devices
+          if (showSampleStudents && apiStudents.length === 0) {
+            apiStudents = [
+              {
+                id: 'sample-1',
+                seatNo: 1,
+                name: '김샘플 (테스트 기기 1)',
+                status: 'focus' as FocusStatus,
+                cameraInstalled: true,
+                cameraConnected: true,
+                googleMeetConnected: true,
+                focusSeconds: 2400,
+                totalSeconds: 2700,
+                drowsyCount: 0,
+                talkingCount: 0,
+                distractedCount: 0,
+                absentSeconds: 0,
+                metrics: { ear: 0.28, mar: 0.08, gazeX: 0, gazeY: 0, headPitch: 2, headYaw: 0, headRoll: 0, upperBodyJitter: 0.5, handNearFace: false, phoneObjectDetected: false, skeletonVisible: true, fps: 12, faceDetected: true },
+                lastUpdated: '방금 전',
+                privacyAvatar: { joints: [], gazeVector: { x: 0, y: 0 } },
+              },
+              {
+                id: 'sample-2',
+                seatNo: 2,
+                name: '박테스트 (테스트 기기 2)',
+                status: 'drowsy' as FocusStatus,
+                cameraInstalled: true,
+                cameraConnected: true,
+                googleMeetConnected: true,
+                focusSeconds: 1800,
+                totalSeconds: 2700,
+                drowsyCount: 3,
+                talkingCount: 0,
+                distractedCount: 0,
+                absentSeconds: 0,
+                metrics: { ear: 0.12, mar: 0.06, gazeX: 0, gazeY: 0.5, headPitch: 30, headYaw: 0, headRoll: 0, upperBodyJitter: 0.2, handNearFace: false, phoneObjectDetected: false, skeletonVisible: true, fps: 12, faceDetected: true },
+                lastUpdated: '방금 전',
+                privacyAvatar: { joints: [], gazeVector: { x: 0, y: 0 } },
+              },
+            ].filter((s) => !kickedIdsRef.current.has(s.id));
+          }
+
+          if (apiStudents.length > 0) {
+            setStudents(apiStudents);
+          }
+          if (data.alerts) setAlerts(data.alerts);
+          if (data.googleMeetUrl) setGoogleMeetUrl(data.googleMeetUrl);
         }
-
-        setStudents(apiStudents);
-        if (data.alerts) setAlerts(data.alerts);
-        if (data.googleMeetUrl) setGoogleMeetUrl(data.googleMeetUrl);
       }
     } catch (err) {
-      console.warn('Error fetching room state:', err);
+      // ignore offline API sync errors on static hosts
     }
   };
 
@@ -182,8 +235,18 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
     const msg = customMsg || directMessageText.trim() || '지속적인 수면/소란이 감지되었습니다. 바른 자세로 집중해 주세요.';
     playAlarmSound();
 
+    const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
+
+    // Broadcast over channel
+    roomChannel.broadcast({
+      type: 'TEACHER_MESSAGE',
+      roomCode: cleanRoom,
+      studentId: student.id,
+      message: msg,
+      timestamp: Date.now(),
+    });
+
     try {
-      const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
       await fetch(`/api/rooms/${cleanRoom}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -201,14 +264,22 @@ export const TeacherMode: React.FC<TeacherModeProps> = ({ currentUser }) => {
   const handleKickStudent = async (studentId: string, studentName: string) => {
     if (!confirm(`${studentName} 학생을 클래스에서 내보내시겠습니까?`)) return;
 
+    const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
     kickedIdsRef.current.add(studentId);
     setStudents((prev) => prev.filter((s) => s.id !== studentId));
     if (selectedStudent?.id === studentId) {
       setSelectedStudent(null);
     }
 
+    // Broadcast kick event across tabs
+    roomChannel.broadcast({
+      type: 'TEACHER_KICK',
+      roomCode: cleanRoom,
+      studentId,
+      timestamp: Date.now(),
+    });
+
     try {
-      const cleanRoom = roomCode.toUpperCase().trim().replace(/\s+/g, '');
       await fetch(`/api/rooms/${cleanRoom}/students/${studentId}`, {
         method: 'DELETE',
       });

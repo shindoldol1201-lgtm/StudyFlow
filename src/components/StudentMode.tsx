@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FocusStatus, VisionMetrics, UserProfile } from '../types';
 import { CameraVisionCanvas } from './CameraVisionCanvas';
+import { roomChannel } from '../lib/roomChannel';
 import { Play, Pause, RotateCcw, QrCode, Bell, ShieldAlert, CheckCircle2, Flame, Smartphone, AlertCircle, Copy, ExternalLink, Video, UserX, LogOut } from 'lucide-react';
 
 interface StudentModeProps {
@@ -63,48 +64,78 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser, onLogout 
   const [flashEnabled, setFlashEnabled] = useState<boolean>(true);
   const [activeAlertPopup, setActiveAlertPopup] = useState<string | null>(null);
 
-  // Sync state to backend API for Teacher View
+  // Subscribe to roomChannel for real-time messages from teacher (warnings, kick, unkick)
+  useEffect(() => {
+    const cleanRoom = joinedRoom.toUpperCase().trim().replace(/\s+/g, '');
+    const unsubscribe = roomChannel.subscribe(cleanRoom, (msg) => {
+      if (msg.studentId === studentSessionId || !msg.studentId) {
+        if (msg.type === 'TEACHER_KICK' && msg.studentId === studentSessionId) {
+          setIsKickedOut(true);
+        } else if (msg.type === 'TEACHER_UNKICK' && msg.studentId === studentSessionId) {
+          setIsKickedOut(false);
+        } else if (msg.type === 'TEACHER_MESSAGE' && msg.studentId === studentSessionId) {
+          setTeacherConnectedMessage(`🚨 [교사 경고 알림]: "${msg.message}"`);
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, [joinedRoom, studentSessionId]);
+
+  // Sync state to backend API and roomChannel broadcast for Teacher View
   useEffect(() => {
     const syncToTeacher = async () => {
+      const cleanRoom = joinedRoom.toUpperCase().trim().replace(/\s+/g, '');
+      const studentPayload = {
+        id: studentSessionId,
+        seatNo,
+        name: studentName,
+        status,
+        cameraInstalled: true,
+        cameraConnected: true,
+        googleMeetConnected: true,
+        focusSeconds,
+        totalSeconds,
+        drowsyCount: drowsyAlertCount,
+        talkingCount: distractionCount,
+        distractedCount: distractionCount,
+        absentSeconds: status === 'absent' ? 10 : 0,
+        metrics,
+      };
+
+      // 1. Cross-tab Broadcast Channel sync
+      roomChannel.broadcast({
+        type: 'STUDENT_SYNC',
+        roomCode: cleanRoom,
+        studentId: studentSessionId,
+        student: studentPayload,
+        timestamp: Date.now(),
+      });
+
+      // 2. Backend API sync (safe JSON handling)
       try {
-        const cleanRoom = joinedRoom.toUpperCase().trim().replace(/\s+/g, '');
         const res = await fetch(`/api/rooms/${cleanRoom}/student-sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             className: '3학년 1반 자율학습',
-            student: {
-              id: studentSessionId,
-              seatNo,
-              name: studentName,
-              status,
-              cameraInstalled: true,
-              cameraConnected: true,
-              googleMeetConnected: true,
-              focusSeconds,
-              totalSeconds,
-              drowsyCount: drowsyAlertCount,
-              talkingCount: distractionCount,
-              distractedCount: distractionCount,
-              absentSeconds: status === 'absent' ? 10 : 0,
-              metrics,
-            },
+            student: studentPayload,
           }),
         });
 
         if (res.ok) {
-          const resData = await res.json();
-          if (resData.kicked) {
-            setIsKickedOut(true);
-          } else {
-            setIsKickedOut(false);
-          }
-          if (resData.directMessage) {
-            setTeacherConnectedMessage(`🚨 [교사 경고 알림]: "${resData.directMessage}"`);
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const resData = await res.json();
+            if (resData.kicked) {
+              setIsKickedOut(true);
+            }
+            if (resData.directMessage) {
+              setTeacherConnectedMessage(`🚨 [교사 경고 알림]: "${resData.directMessage}"`);
+            }
           }
         }
       } catch (e) {
-        console.warn('Sync error:', e);
+        // Backend API unreachable or static host (Vercel) - ignore silently as BroadcastChannel handles it
       }
     };
 
@@ -152,8 +183,15 @@ export const StudentMode: React.FC<StudentModeProps> = ({ currentUser, onLogout 
   const handleLeaveClass = async () => {
     if (!confirm('현재 클래스에서 나가시겠습니까? 교사 대시보드 연결이 끊어지고 초기 화면으로 이동합니다.')) return;
 
+    const cleanRoom = joinedRoom.toUpperCase().trim().replace(/\s+/g, '');
+    roomChannel.broadcast({
+      type: 'STUDENT_LEAVE',
+      roomCode: cleanRoom,
+      studentId: studentSessionId,
+      timestamp: Date.now(),
+    });
+
     try {
-      const cleanRoom = joinedRoom.toUpperCase().trim().replace(/\s+/g, '');
       await fetch(`/api/rooms/${cleanRoom}/students/${studentSessionId}`, {
         method: 'DELETE',
       });
